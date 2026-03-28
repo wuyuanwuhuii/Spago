@@ -32,7 +32,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 SRC_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scMOG"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Spago"
 )
 assert os.path.isdir(SRC_DIR)
 sys.path.append(SRC_DIR)
