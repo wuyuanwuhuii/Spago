@@ -2,7 +2,7 @@
 The development of spatial multi-omics data can provide more biologically meaningful explanations for studying disease mechanisms and implementing precision medicine applications. To address the current lack of spatial multi-omics data, we have designed a deep generative model based on VGAE, named Spago. Through the trained model, Spago can accurately and efficiently generate between multi-omics data.
 
 ## Framework
-![framework](./image/algorithm.png)
+![framework](image/algorithm.png)
 
 ## Installation
 
