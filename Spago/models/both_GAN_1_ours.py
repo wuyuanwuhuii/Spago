@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
 
@@ -11,7 +12,7 @@ from torch_geometric.nn import VGAE
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import activations
-from torch_geometric.nn import GCNConv, Sequential, BatchNorm,GATConv,SGConv,TAGConv, SAGEConv,TransformerConv
+from torch_geometric.nn import GCNConv, Sequential, BatchNorm,GATConv,SGConv,TAGConv, SAGEConv,TransformerConv,GraphSAGE, GATv2Conv, GraphSAGE
 import torch.nn.functional as F
 
 torch.backends.cudnn.deterministic = True  # For reproducibility
@@ -207,60 +208,92 @@ class ATACEncoder(nn.Module):
         return x
         
 
+class VGAEEncoder_protein(nn.Module):
+    def __init__(self, in_channels, hidden_channels, latent_channels, spatial_coord_dim=2, dropout_rate=0, K= 3):
+        super(VGAEEncoder_protein, self).__init__()
 
-class SplitEnc(nn.Module):
-    def __init__(self, input_dim, z_dim, SUB_1=64, SUB_2=32, seed: int = 182822):
-        super(SplitEnc, self).__init__()
-        torch.manual_seed(seed)  # Set the seed for reproducibility
+        # Define the linear encoder
+        self.linear_encoder = nn.Sequential(
+            nn.Linear(in_channels, 256),
+            nn.BatchNorm1d(256),
+            #nn.PReLU(),
+            nn.LeakyReLU(0.2, inplace=True),
+            #nn.Dropout(dropout_rate),
+            #nn.Linear(512,256),
+            #nn.BatchNorm1d(256),
+            #nn.LeakyReLU(0.2, inplace=True),
+            #nn.PReLU(),
+            #nn.Dropout(dropout_rate)
+        )
 
-        self.input_dim = input_dim  # List of input dimensions for each part
-        self.split_layer = nn.ModuleList()
+        self.conv1 = GATv2Conv(in_channels, 32)
+        self.bn1 = nn.BatchNorm1d(256)
+        self.conv2 = GATv2Conv(32,hidden_channels)
+        self.bn2 = nn.BatchNorm1d(hidden_channels)
+        self.conv3 = GATv2Conv(128,hidden_channels)
+        self.fusion_layer = nn.Linear(in_channels + spatial_coord_dim, in_channels + spatial_coord_dim)
+        
+        
+        self.conv_mu = GATv2Conv(hidden_channels, latent_channels)
+        self.conv_logstd = GATv2Conv(hidden_channels, latent_channels)
+        
+        self.elu1 = nn.ELU()  
+        self.elu2 = nn.ELU()
+        self.dropout = nn.Dropout(dropout_rate)
+        self.K = K  # Number of Gaussians in GMM
+   
+    def encode(self, x, edge_index, spatial_coord=None):
+        #if spatial_coord is not None:
+        #    x = torch.cat([x, spatial_coord], dim=1)
+        #    x = self.fusion_layer(x)
 
-        # Construct layers for each split part
-        for n in self.input_dim:
-            # Layer 1
-            layer1 = nn.Linear(n, SUB_1)
-            nn.init.xavier_uniform_(layer1.weight)
-            bn1 = nn.BatchNorm1d(SUB_1)
-            act1 = nn.PReLU()
+        # Pass through the linear encoder
+        #x = self.linear_encoder(x)
 
-            # Layer 2
-            layer2 = nn.Linear(SUB_1, SUB_2)
-            nn.init.xavier_uniform_(layer2.weight)
-            bn2 = nn.BatchNorm1d(SUB_2)
-            act2 = nn.PReLU()
+        # Apply the first graph convolution layer
+        x = F.elu(self.conv1(x, edge_index))
+        #x = self.conv1(x, edge_index).relu()
+        #x = self.bn1(x)  # Apply batch normalization after GCN
+        #x = self.dropout(x)  # Apply dropout for regularization
+        
+        #x = self.conv2(x, edge_index).relu()
+        x = F.elu(self.conv2(x, edge_index))
+        #x = self.bn2(x)
+        #x = self.conv3(x, edge_index).relu()
+       
 
-            self.split_layer.append(
-                nn.ModuleList([layer1, bn1, act1, layer2, bn2, act2])
-            )
+        mu = self.conv_mu(x, edge_index)
+        logstd = self.conv_logstd(x, edge_index)
+        
 
-        # Final encoding layer
-        self.enc2 = nn.Linear(SUB_2 * len(input_dim), z_dim)
-        self.bn2 = nn.BatchNorm1d(z_dim)
+        return mu, logstd
 
-        # Initialize the final layers
-        nn.init.xavier_uniform_(self.enc2.weight)
+    def reparameterize(self, mu, logstd, noise_factor=0.1, min_std=-5.0, max_mu=10.0, max_std=10.0):
+        # Compute standard deviation from log variance
+        #std = torch.exp(logstd)
+    
+        # Apply size restrictions (clamp) on the standard deviation and mean
+        #std = torch.clamp(std, min=min_std, max=max_std)  # Ensure std stays within a valid range
+        #mu = torch.clamp(mu, max=max_mu)  # Limit mu to a maximum value
+        
+        # Generate noise
+        #eps = torch.randn_like(std)  # Standard normal noise
+        #z = eps * std + mu  # Reparameterized latent variable z
+        std = torch.exp(logstd)  # Compute standard deviation from logstd
+        eps = torch.randn_like(std)  # Generate noise
+        z = eps * std + mu  # Reparameterized latent variable z
+        return z
+        
+        return z
 
-    def forward(self, x):
-        # Split the input tensor based on the input dimensions
-        xs = torch.split(x, self.input_dim, dim=1)
+    def forward(self, x, edge_index, spatial_coord=None):
+        # Encoding step to obtain the mean and log variance
+        mu, logstd = self.encode(x, edge_index, spatial_coord)
 
-        # Process each split part through its layers
-        assert len(xs) == len(self.input_dim)
-        enc_chroms = []
-        for init_mod, chrom_input in zip(self.split_layer, xs):
-            for f in init_mod:
-                chrom_input = f(chrom_input)  # Apply layers sequentially
-            enc_chroms.append(chrom_input)
+        # Sample the latent variable using the reparameterization trick
+        z = self.reparameterize(mu, logstd)
 
-        # Concatenate all encoded parts
-        enc1 = torch.cat(enc_chroms, dim=1)
-
-        # Final encoding (latent space)
-        chromosome_enc = self.bn2(self.enc2(enc1))
-
-        # Return the latent variable z (chromosome_enc is z)
-        return chromosome_enc
+        return mu, logstd, z
 
 
 class RNAEncoder_sdss(nn.Module):
@@ -290,6 +323,89 @@ class RNAEncoder_sdss(nn.Module):
         x = self.act1(self.bn1(self.encode1(x)))
         x = self.act2(self.bn2(self.encode2(x)))
         return x
+
+class VGAEEncoder_rna_protein(nn.Module):
+    def __init__(self, in_channels, hidden_channels, latent_channels, spatial_coord_dim=2, dropout_rate=0, K= 3):
+        super(VGAEEncoder_rna_protein, self).__init__()
+
+        # Define the linear encoder
+        self.linear_encoder = nn.Sequential(
+            nn.Linear(in_channels, 256),
+            nn.BatchNorm1d(256),
+            #nn.PReLU(),
+            nn.LeakyReLU(0.2, inplace=True),
+            #nn.Dropout(dropout_rate),
+            #nn.Linear(512,256),
+            #nn.BatchNorm1d(256),
+            #nn.LeakyReLU(0.2, inplace=True),
+            #nn.PReLU(),
+            #nn.Dropout(dropout_rate)
+        )
+
+        self.conv1 = GATv2Conv(in_channels, 128)
+        self.bn1 = nn.BatchNorm1d(256)
+        self.conv2 = GATv2Conv(128,hidden_channels)
+        self.bn2 = nn.BatchNorm1d(hidden_channels)
+        self.conv3 = GATv2Conv(128,hidden_channels)
+        self.fusion_layer = nn.Linear(in_channels + spatial_coord_dim, in_channels + spatial_coord_dim)
+        
+        
+        self.conv_mu = GATv2Conv(hidden_channels, latent_channels)
+        self.conv_logstd = GATv2Conv(hidden_channels, latent_channels)
+        
+        self.elu1 = nn.ELU()  
+        self.elu2 = nn.ELU()  
+        self.dropout = nn.Dropout(dropout_rate)
+   
+    def encode(self, x, edge_index, spatial_coord=None):
+        #if spatial_coord is not None:
+        #    x = torch.cat([x, spatial_coord], dim=1)
+        #    x = self.fusion_layer(x)
+
+        # Pass through the linear encoder
+        #x = self.linear_encoder(x)
+
+        # Apply the first graph convolution layer
+        x = F.elu(self.conv1(x, edge_index))
+        #x = self.conv1(x, edge_index).relu()
+        #x = self.bn1(x)  # Apply batch normalization after GCN
+        #x = self.dropout(x)  # Apply dropout for regularization
+        
+        x = self.conv2(x, edge_index).relu()
+        #x = F.elu(self.conv2(x, edge_index))
+        #x = self.bn2(x)
+        #x = self.conv3(x, edge_index).relu()
+       
+
+        mu = self.conv_mu(x, edge_index)
+        logstd = self.conv_logstd(x, edge_index)
+        
+
+        return mu, logstd
+
+    def reparameterize(self, mu, logstd, noise_factor=0.1, min_std=-5.0, max_mu=10.0, max_std=10.0):
+        # Compute standard deviation from log variance
+        std = torch.exp(logstd)
+    
+        # Apply size restrictions (clamp) on the standard deviation and mean
+        std = torch.clamp(std, min=min_std, max=max_std)  # Ensure std stays within a valid range
+        mu = torch.clamp(mu, max=max_mu)  # Limit mu to a maximum value
+        
+        # Generate noise
+        eps = torch.randn_like(std)  # Standard normal noise
+        z = eps * std + mu  # Reparameterized latent variable z
+        
+        return z
+
+    def forward(self, x, edge_index, spatial_coord=None):
+        # Encoding step to obtain the mean and log variance
+        mu, logstd = self.encode(x, edge_index, spatial_coord)
+
+        # Sample the latent variable using the reparameterization trick
+        z = self.reparameterize(mu, logstd)
+
+        return mu, logstd, z
+
 
 
 class VGAEEncoder_old(nn.Module):
@@ -704,6 +820,82 @@ class VGAEModel_protein(torch.nn.Module):
         return elbo_loss.mean() , recon, kl.mean() 
 
 
+class VGAEModel_rna_protein(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, latent_channels, num_outputs_protein, spatial_coord_dim = 2):
+        super(VGAEModel_rna_protein, self).__init__()
+        self.encoder = VGAEEncoder_rna_protein(in_channels, hidden_channels, latent_channels)
+        self.decoder = ProteinDecoder(num_outputs=num_outputs_protein, num_units=latent_channels,final_activation=nn.Identity())
+        #self.decoder = Decoder(
+        #    latent_channels,  
+        #    num_outputs_rna,
+        #)
+        
+
+    def forward(self, x, edge_index, spatial_coord, size_factors=None):
+    
+        mu, logstd, z = self.encoder(x, edge_index, spatial_coord)
+        #z = reparameterize(mu, logstd)
+
+        # 
+        y,adj_pred = self.decoder(z,spatial_coord)
+        
+        A_pred = torch.sigmoid(torch.matmul(z,z.t()))
+        return z, y, mu, logstd,adj_pred
+
+    def recon_loss(self, adj_pred, adj_orig):
+        # 
+        loss = F.binary_cross_entropy(adj_pred, adj_orig)
+        return loss
+
+    def kl_loss(self, mu, logstd):
+        
+        kl = -0.5 * torch.sum(1 + 2 * logstd - mu.pow(2) - torch.exp(2 * logstd), dim=1)
+        return kl.mean()
+    def compute_elbo(self, mu, logstd, recon, beta=0.01):
+       
+        kl = self.kl_loss(mu, logstd)  #
+        elbo_loss = recon + beta * kl  # 
+        return elbo_loss.mean() , recon, kl.mean()  
+        
+
+class VGAEModel_protein_rna(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, latent_channels, num_outputs_rna, spatial_coord_dim = 2):
+        super(VGAEModel_protein_rna, self).__init__()
+        self.encoder = VGAEEncoder_protein(in_channels, hidden_channels, latent_channels)
+        self.decoder = RNADecoder(
+             num_outputs=num_outputs_rna,
+             num_units=latent_channels,
+             final_activation=[activations.Exp(), activations.ClippedSoftplus(),nn.Sigmoid()],  
+        )
+        #self.decoder = Decoder(
+        #    latent_channels,  
+        #    num_outputs_rna,
+        #)
+        
+
+    def forward(self, x, edge_index, spatial_coord, size_factors=None):
+        mu, logstd,z = self.encoder(x,edge_index,spatial_coord)
+        adj = to_dense_adj(edge_index)[0].to(z.device)  
+        #z = reparameterize(mu, logstd)
+        
+        retval1, retval2, retval3, adj_pred = self.decoder(z, spatial_coord, size_factors=None)
+        return z, retval1, retval2, retval3, mu, logstd, adj_pred
+
+    def recon_loss(self, preds, truth):
+        retval1 = preds
+        loss1 = F.mse_loss(retval1, truth) 
+        return loss1
+
+    
+    def kl_loss(self, mu, logstd):
+        return -0.5 * torch.mean(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd))
+    def compute_elbo(self, mu, logstd, recon, beta=0.1):
+      
+        kl = self.kl_loss(mu, logstd)  
+        elbo_loss = recon + beta * kl 
+        return elbo_loss.mean() , recon, kl.mean() 
+
+
 
 class ATACDecoder(nn.Module):
     def __init__(
@@ -764,19 +956,20 @@ class ProteinDecoder(nn.Module):
         self.num_outputs = num_outputs
         self.latent_dim = num_units
 
-        self.decode1 = nn.Linear(self.latent_dim, 64)
-        nn.init.xavier_uniform_(self.decode1.weight)
-        self.bn1 = nn.BatchNorm1d(64)
+        self.decode1 = nn.Linear(self.latent_dim, 256)
+        #nn.init.xavier_uniform_(self.decode1.weight)
+        self.bn1 = nn.BatchNorm1d(256)
         self.act1 = nn.LeakyReLU(0.2, inplace=True)
 
-        self.decode2 = nn.Linear(64,self.num_outputs)
-        nn.init.xavier_uniform_(self.decode2.weight)
+        self.decode2 = nn.Linear(256,self.num_outputs)
+        #nn.init.xavier_uniform_(self.decode2.weight)
         self.final_activations = final_activation
 
-    def forward(self, x):
+    def forward(self, x, spatial_coords):
+        adj_pred = torch.sigmoid(torch.matmul(x, x.t()))
         x = self.act1(self.bn1(self.decode1(x)))
         x = self.final_activations(self.decode2(x))
-        return x
+        return x, adj_pred
 
 
 class RNADecoder_orign(nn.Module):
@@ -845,46 +1038,17 @@ class RNADecoder_orign(nn.Module):
         self.prelu = nn.ELU()
 
     def forward(self, x, spatial_coords, size_factors=None):
-      
-        #x = torch.cat([x, spatial_coords], dim=1)
-        #if spatial_coords is not None:
-        #    x = torch.cat([x, spatial_coords], dim=1)
-            #x = self.fusion_layer(x)
-        print("rrrrrrrr")
-        print(x.shape)
-        print(spatial_coords.shape)
         x = self.act1(self.bn1(self.decode1(x)))
         x = self.act2(self.bn2(self.decode2(x)))
-        #x = self.act3(self.bn3(self.decoder_1(x)))
-        #x = self.decoder_2(x)
+       
         adj_pred = torch.sigmoid(torch.matmul(x, x.t()))
-        retval1 = self.decode21(x)  # This is invariably the counts
+        retval1 = self.decode21(x) 
         retval2 = self.decode22(x)
         retval3 = self.decode23(x)
-        
-        
-        #retval1 = self.final_activations(retval1)
-        #if "act1" in self.final_activations.keys():
-        #    retval1 = self.final_activations["act1"](retval1)
-        #if size_factors is not None:
-        #    sf_scaled = size_factors.view(-1, 1).repeat(1, retval1.shape[1])
-        #    retval1 = retval1 * sf_scaled  # Elementwise multiplication
-
-        #retval2 = self.decode22(x)
-        #if "act2" in self.final_activations.keys():
-        #    retval2 = self.final_activations["act2"](retval2)
-
-        #retval3 = self.decode23(x)
-        #if "act3" in self.final_activations.keys():
-        #    retval3 = self.final_activations["act3"](retval3)
-        
+         
         retval1 = self.final_activations[0](retval1)
         retval2 = self.final_activations[1](retval2)
         retval3 = self.final_activations[2](retval3)
-        
-        #retval3 = torch.sigmoid(self.pi(x))
-        #retval2 = self.DispAct(self.disp(x))
-        #retval1 = self.MeanAct(self.mean(x))
         
         return retval1,retval2,retval3, adj_pred
 
@@ -1441,37 +1605,3 @@ class DiscriminatorProtein(nn.Module):
 
         return y
 
-# class GeneratorATAC(nn.Module):
-#     def __init__(
-#             self,
-#             input_dim1: int,
-#             input_dim2: int,
-#             #out_dim: List[int],
-#             hidden_dim: int = 16,
-#             final_activations2=nn.Sigmoid(),
-#
-#             flat_mode: bool = True,  # Controls if we have to re-split inputs
-#             seed: int = 182822,
-#     ):
-#         nn.Module.__init__(self)
-#         torch.manual_seed(seed)  ##为CPU设置种子用于生成随机数，以使得结果是确定的
-#
-#         self.flat_mode = flat_mode
-#         self.input_dim1 = input_dim1,
-#         self.input_dim2 = input_dim2,
-#         self.final_activations = final_activations2
-#         self.RNAencoder = RNAEncoder(num_inputs=input_dim1, num_units=hidden_dim,  )
-#         #self.RNAdecoder = RNADecoder(num_outputs=out_dim1, num_units=hidden_dim,final_activation=final_activations1)
-#         #self.ATACencoder = ATACEncoder(num_inputs=input_dim2, num_units=hidden_dim)
-#         self.ATACdecoder = ATACDecoder(num_outputs=input_dim2, num_units=hidden_dim,final_activation=final_activations2)
-#         self.inference = Inference(num_inputs=input_dim1, final_activation=final_activations2)
-#         self.region_factors = torch.nn.Parameter(torch.zeros(self.input_dim2))
-#         nn.init.uniform_(self.region_factors)
-#
-#
-#     def forward(self, x):
-#         encoded = self.RNAencoder(x)
-#         decoded=self.ATACdecoder(encoded)
-#         final=decoded*self.inference(x)
-#         final=final*self.final_activations(self.region_factors)
-#         return final
