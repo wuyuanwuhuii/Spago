@@ -60,38 +60,6 @@ def scale(adata):
     normalized_data = scaler.fit_transform(adata.X.T).T
     adata.X = normalized_data
     return adata
-    
-def log_zinb_positive(x, mu, theta, pi, eps=1e-8):
-    """
-    https://github.com/YosefLab/scVI/blob/6c9f43e3332e728831b174c1c1f0c9127b77cba0/scvi/models/log_likelihood.py#L206
-    """
-    # theta is the dispersion rate. If .ndimension() == 1, it is shared for all cells (regardless of batch or labels)
-    if theta.ndimension() == 1:
-        theta = theta.view(
-            1, theta.size(0)
-        )  # In this case, we reshape theta for broadcasting
-
-    softplus_pi = F.softplus(-pi)
-    log_theta_eps = torch.log(theta + eps)
-    log_theta_mu_eps = torch.log(theta + mu + eps)
-    pi_theta_log = -pi + theta * (log_theta_eps - log_theta_mu_eps)
-
-    case_zero = F.softplus(pi_theta_log) - softplus_pi
-    mul_case_zero = torch.mul((x < eps).type(torch.float32), case_zero)
-
-    case_non_zero = (
-        -softplus_pi
-        + pi_theta_log
-        + x * (torch.log(mu + eps) - log_theta_mu_eps)  # Found above
-        + torch.lgamma(x + theta)  # Found above
-        - torch.lgamma(theta)  # Found above
-        - torch.lgamma(x + 1)  # Found above
-    )
-    mul_case_non_zero = torch.mul((x > eps).type(torch.float32), case_non_zero)
-
-    res = mul_case_zero + mul_case_non_zero
-
-    return -res.mean()
 
 class PairedGraphDataset(Dataset):
     def __init__(self, rna_graph, atac_graph):
@@ -399,10 +367,6 @@ def preprocess_combined_graph_Guss(adata, feature_type, sigma=1.0, threshold=0.1
 
     return Data(x=features, edge_index=edge_index_spatial, coordinates=coordinates)
 
-
-
-
-
 def preprocess_combined_graph(adata, feature_type, k=4, metric='cosine'):
     #coordinates = torch.tensor(list(zip(adata.obs['x'], adata.obs['y'])), dtype=torch.float32)
     coordinates = torch.tensor(adata.obsm['spatial'], dtype=torch.float32)
@@ -415,42 +379,27 @@ def preprocess_combined_graph(adata, feature_type, k=4, metric='cosine'):
             if i != neighbor:
                 edge_index_spatial.append([i, neighbor])
     edge_index_spatial = torch.tensor(edge_index_spatial, dtype=torch.long).t()
-
-    # 
-    print("1232445555")
-    print(adata)
     X = adata.X.tocoo() if hasattr(adata.X, "tocoo") else adata.X
     if issparse(X):
         features = torch.tensor(X.toarray(), dtype=torch.float32)
     else:
         features = torch.tensor(X, dtype=torch.float32)
-
-    # 
     if feature_type == 'rna':
         edge_index_feature = build_adjacency_from_rna(features, k=k, metric=metric)
     elif feature_type == 'atac':
         edge_index_feature = build_adjacency_from_atac(features, k=k)
     else:
         raise ValueError("Invalid feature_type. Use 'rna' or 'atac'.")
-
-    # 
     return Data(x=features, edge_index=edge_index_spatial, coordinates=coordinates)
 
 def preprocess_self_loop_graph(adata):
     num_nodes = adata.shape[0]
-    
-    # 
     edge_index_self_loop = torch.arange(num_nodes).repeat(2, 1)  # [ [0,1,2,...], [0,1,2,...] ]
-
-    # 
     X = adata.X.tocoo() if hasattr(adata.X, "tocoo") else adata.X
     features = torch.tensor(X.toarray(), dtype=torch.float32)
-
-    # 
     coordinates = torch.tensor(list(zip(adata.obs['x'], adata.obs['y'])), dtype=torch.float32)
 
     return Data(x=features, edge_index=edge_index_self_loop, coordinates=coordinates)
-
 
 
 def predict_atac(truth,generator,truth_iter, outdir_name, rna2atac, atac2rna,):
@@ -459,39 +408,25 @@ def predict_atac(truth,generator,truth_iter, outdir_name, rna2atac, atac2rna,):
         generator.eval()
         first = 1
         for i in range(1):
-            
             # RNA graph
             rna_features = truth_iter.x # RNA node_feature
             rna_edge_index = truth_iter.edge_index  # RNA_edges
-            rna_coord = truth_iter.coordinates  # RNA_edges
-                    
+            rna_coord = truth_iter.coordinates  # RNA_edges      
             with torch.no_grad():
                 z, y_pred, mu, logstad, adj_pred = generator(rna_features, rna_edge_index, rna_coord)  
-                #mu, logstad, z = generator.encoder(rna_features, rna_edge_index, rna_coord) 
-                #rna2atac_latent = rna2atac(z)
-                #rna_latent_recon = atac2rna(rna2atac_latent)
-                #y_pred, adj_pred = generator.decoder(rna_latent_recon,rna_coord)
-                ret = y_pred
-                
+                ret = y_pred 
         return ret,z
-
     sc_rna_atac_truth_preds,z = predict1(generator,truth_iter)
     #print(sc_atac_test_dataset)
     #print(sc_rna_atac_truth_preds.shape)
-            # 
     if isinstance(sc_rna_atac_truth_preds, torch.Tensor):
         tt = sc_rna_atac_truth_preds.cpu().numpy()  # 
-            
-            
     if isinstance(sc_rna_atac_truth_preds, np.ndarray):
         tt = sc_rna_atac_truth_preds.astype(np.float32)
-        
     if isinstance(z, torch.Tensor):
         z = z.cpu().numpy()  # Convert z_atac to numpy array if it's a tensor
     #sc_atac_test_dataset.X = tt
-    #sc_atac_test_dataset.obsm['z_rna'] = z  # Add z_atac to the obs as new data
     #sc_atac_test_dataset.write_h5ad("/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/predict_pro_ours_mouse_spleen.h5ad")
-    
     #fig = plot_auroc(
     #    truth,
     #    sc_rna_atac_truth_preds,
@@ -538,13 +473,8 @@ def predict_rna(truth,generator,truth_iter, outdir_name, rna2atac, atac2rna, sc_
         return ret
     
     sc_rna_truth_preds = predict2(generator,truth_iter, rna2atac, atac2rna)
-    #print(sc_rna_test_dataset)
-    #print(sc_rna_truth_preds.shape)
-            # 
     if isinstance(sc_rna_truth_preds, torch.Tensor):
-        tt = sc_rna_truth_preds.cpu().numpy()  # 
-            
-            
+        tt = sc_rna_truth_preds.cpu().numpy()
     if isinstance(sc_rna_truth_preds, np.ndarray):
         tt = sc_rna_truth_preds.astype(np.float32)
     sc_rna_train_dataset_save.X = tt
@@ -569,24 +499,7 @@ def normalize(adata, highly_genes=3000):
     adata.X = adata.X / np.sum(adata.X, axis=1).reshape(-1, 1) * 10000
     sc.pp.scale(adata, zero_center=False, max_value=10)
     return adata
-    
-def clean_data(adata):
-    if hasattr(adata.X, 'toarray'):  
-        adata.X = adata.X.toarray()
-    print("Before cleaning:")
-    print(f"NaN count: {np.isnan(adata.X).sum()}")
-    print(f"Infinity count: {(np.isinf(adata.X)).sum()}")
-    
-    # 
-    adata.X = np.nan_to_num(adata.X, nan=0, posinf=0, neginf=0)
-
-    # 
-    print("After cleaning:")
-    print(f"NaN count: {np.isnan(adata.X).sum()}")
-    print(f"Infinity count: {(np.isinf(adata.X)).sum()}")
-    
-    return adata
-    
+      
 def clr_transform(x: np.ndarray, add_pseudocount: bool = True) -> np.ndarray:
     if not isinstance(x, np.ndarray):
         x = x.toarray()
@@ -654,92 +567,17 @@ def main():
         loss1 = -torch.mean(discriminator(fake, edge_index, spatial_coords))  #
         return loss1 
 
-    sc_rna_train_dataset=ad.read_h5ad('/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/adata_RNA_1.h5ad')
-    sc_atac_train_dataset=ad.read_h5ad('/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/adata_ADT_1.h5ad')
-    
-    
-    
-    #sc_atac_train_dataset_1=ad.read_h5ad('/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/human_data/full_atac.h5ad')
-    print("mmmmmmm")
-    print(np.max(sc_rna_train_dataset.X), np.min(sc_rna_train_dataset.X))
-    print(np.max(sc_atac_train_dataset.X), np.min(sc_atac_train_dataset.X))
-    print(sc_rna_train_dataset)  
-    print(sc_atac_train_dataset)
-    print(sc_atac_train_dataset.var_names)
-    
-    #sc_rna_test_dataset=ad.read_h5ad('/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/snareseq/valid_rna.h5ad')
-    #sc_atac_test_dataset=ad.read_h5ad('/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/snareseq/valid_atac.h5ad')
-    #sc_rna_dataset=ad.read_h5ad('/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/snareseq/full_rna.h5ad')
-    #sc_atac_dataset=ad.read_h5ad('/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/snareseq/full_atac.h5ad')
-    
-    #sc_rna_train_dataset.obs['x'] = sc_atac_train_dataset_1.obs['x']
-    #sc_rna_train_dataset.obs['y'] = sc_atac_train_dataset_1.obs['y']
-    #sc_atac_train_dataset.obs['x'] = sc_atac_train_dataset_1.obs['x']
-    #sc_atac_train_dataset.obs['y'] = sc_atac_train_dataset_1.obs['y']
-    print(sc_rna_train_dataset)
-    print(sc_atac_train_dataset)
-     
-    
-    #sc_rna_train_dataset.obs['x'] = sc_rna_train_dataset.obsm['spatial'][:, 0] 
-    #sc_rna_train_dataset.obs['y'] = sc_rna_train_dataset.obsm['spatial'][:, 1] 
-    #sc_atac_train_dataset.obs['x'] = sc_rna_train_dataset.obsm['spatial'][:, 0] 
-    #sc_atac_train_dataset.obs['y'] = sc_rna_train_dataset.obsm['spatial'][:, 1] 
-    #sc_rna_test_dataset.obs['x'] = sc_atac_test_dataset.obs['x']
-    #sc_rna_test_dataset.obs['y'] = sc_atac_test_dataset.obs['y']
-    #sc_rna_dataset.obs['x'] = sc_atac_dataset.obs['x']
-    #sc_rna_dataset.obs['y'] = sc_atac_dataset.obs['y']
-    
- 
-    
-    # RNA 
-    #adata_temp = sc_rna_train_dataset.copy()
-
-    # 
-    #sc.pp.normalize_total(adata_temp)
-    #sc.pp.log1p(adata_temp)
-    
-    # 
-    #sc.pp.highly_variable_genes(adata_temp, n_top_genes=5000)
-    
-    # 
-    
-    #highly_variable_genes = adata_temp.var['highly_variable']
-    #sc_rna_train_dataset = sc_rna_train_dataset[:, adata_temp.var['highly_variable']].copy()
-    #print(np.max(sc_rna_train_dataset.X))
-    #ddddd
-    #sc_rna_train_dataset = normalize(sc_rna_train_dataset)
-    
+    sc_rna_train_dataset=ad.read_h5ad('../data/spleen_protein/adata_RNA_1.h5ad')
+    sc_atac_train_dataset=ad.read_h5ad('../data/spleen_protein/adata_ADT_1.h5ad')     
     sc_rna_train_dataset_save = sc_rna_train_dataset
-  
-    sc.pp.normalize_total(sc_rna_train_dataset) 
+    sc.pp.normalize_total(sc_rna_train_dataset,target_sum=1e4) 
     sc.pp.log1p(sc_rna_train_dataset)
     #print(np.max(sc_rna_train_dataset.X))
-    
-    print(sc_atac_train_dataset.X)
     sc_atac_train_dataset.X = clr_transform(sc_atac_train_dataset.X)
-    print(sc_atac_train_dataset.X)
-    
-    
-    #sc_atac_train_dataset.X[sc_atac_train_dataset.X > 0] = 1 
-    
-    
     #sc_rna_train_dataset = scale(sc_rna_train_dataset)
-    
-    #sc.pp.normalize_total(sc_atac_train_dataset, target_sum=1e4)
-    #sc.pp.log1p(sc_atac_train_dataset)
-    # Preprocess data
-    #graph_rna = preprocess_adata_to_grap h(sc_rna_train_dataset)
-    #graph_atac = preprocess_adata_to_graph(sc_atac_train_dataset)
-    
-    #s
-    #sc_rna_train_dataset, test_indices_rna, val_indices_rna = mask_spots(sc_rna_train_dataset, test_fraction=0.2, val_fraction=0.1, seed=1234)
-    #sc_atac_train_dataset, test_indices_atac, val_indices_atac = mask_spots(sc_atac_train_dataset, test_fraction=0.2, val_fraction=0.1, seed=1234)
-    
+
     graph_rna = preprocess_combined_graph(sc_rna_train_dataset, feature_type='rna', k=14, metric='cosine' )
     graph_atac = preprocess_combined_graph(sc_atac_train_dataset, feature_type='atac', k=14, metric='cosine')
-    #graph_rna = preprocess_self_loop_graph(sc_rna_train_dataset)
-    #graph_atac = preprocess_self_loop_graph(sc_atac_train_dataset) 
-
     # Split data
     #train_rna, train_atac, valid_rna, valid_atac,test_rna, test_atac = split_graph_data(graph_rna, graph_atac)
     print("Evalulate numbers:")
@@ -751,52 +589,25 @@ def main():
     test_atac = graph_atac
     valid_rna = graph_rna
     valid_atac = graph_atac
-    print(train_rna)
-    print(train_atac)
-    print("************  datasets split  ***********")
-    print(sc_rna_train_dataset)
-    print(train_rna)
-    print(test_rna)
-    print(valid_rna)  
     
-    #train_rna_s = sc.AnnData(X=train_rna.x.cpu().numpy())
-    #train_atac_s = sc.AnnData(X=train_atac.x.cpu().numpy())
-    #test_rna_s = sc.AnnData(X=test_rna.x.cpu().numpy())
-    #test_atac_s = sc.AnnData(X=test_atac.x.cpu().numpy())
-    #valid_rna_s = sc.AnnData(X=valid_rna.x.cpu().numpy())
-    #valid_atac_s = sc.AnnData(X=valid_atac.x.cpu().numpy())
-    #full_rna = sc.AnnData(X=valid_rna.x.cpu().numpy())
-      
-    #train_rna_s.write_h5ad("/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/train_rna.h5ad")
-    #train_atac_s.write_h5ad("/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/train_atac.h5ad")
-    #test_rna_s.write_h5ad("/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/truth_rna.h5ad")
-    #test_atac_s.write_h5ad("/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/truth_atac.h5ad")
-    #valid_rna_s.write_h5ad("/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/valid_rna.h5ad")
-    #valid_atac_s.write_h5ad("/mnt/datab/home/zhaohui/WBT/scMOG-main/scMOG_code/spleen1_protein/valid_atac.h5ad")
-    #sc_rna_train_dataset.write_h5ad("/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/spleen1_protein/full_rna.h5ad")
-    
-   
     train_dataset = PairedGraphDataset(train_rna, train_atac)
     test_dataset = PairedGraphDataset(test_rna, test_atac)
     valid_dataset = PairedGraphDataset(valid_rna, valid_atac)
-    
     batch_size = 32
-    
-    # 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     truth_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
+
     # Define model and optimizer
     in_channels_rna = graph_rna.x.size(1)  # RNA
     in_channels_atac = graph_atac.x.size(1)  # ATAC 
-    hidden_channels = 48 #  128
-    latent_channels = 64#  64
+    hidden_channels = 128 
+    latent_channels = 64
     
-    hidden_channels_2 = 64  # 128  32 64
-    latent_channels_2 = 32 # 64  15 32
+    hidden_channels_2 = 64  
+    latent_channels_2 = 32 
   
-    num_outputs_rna = graph_atac.x.size(1)  # 
+    num_outputs_rna = graph_atac.x.size(1)  
     num_outputs_atac = graph_rna.x.size(1)  # ATAC 
     
     
@@ -804,11 +615,6 @@ def main():
     #input_dim2 = chrom_counts.values.tolist()
     generatorRNA = both_GAN_1_new.VGAEModel_protein_rna(in_channels_atac, hidden_channels, latent_channels, num_outputs_atac)  # RNADecoder
     
-    
-    
-    
-    #rna2atac = both_GAN_1.AffineTransform(16, 256, affine_num=20)
-    #atac2rna = both_GAN_1.AffineTransform(16, 256, affine_num=20)
     
     rna2atac = both_GAN_1_new.AffineTransform(64, 128, affine_num=9)
     atac2rna = both_GAN_1_new.AffineTransform(64, 128, affine_num=9)
@@ -822,7 +628,7 @@ def main():
     #chrom_counts = sc_atac_train_dataset.var['chrom'].value_counts()
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = 'cpu'
+    #device = 'cpu'
     print(np.max(sc_rna_train_dataset.X), np.min(sc_rna_train_dataset.X))
     print(np.max(sc_atac_train_dataset.X), np.min(sc_atac_train_dataset.X))
     
@@ -895,9 +701,6 @@ def main():
                 #torch.autograd.set_detect_anomaly(True)
                 updaterD.zero_grad()
                 z, y, mu, logstd, adj_pred = model(data.x.to(device), data.edge_index.to(device),data.coordinates.to(device))
-                y_max = y.max().item() 
-                print(f"Maximum value of y: {y_max}")
-                #loss2 = loss_D(y, y_hat, discriminator)
                 loss2 = loss_D(y, y_hat, discriminator, data.edge_index, data.coordinates)
                 loss2.backward()
                 updaterD.step()
@@ -911,21 +714,9 @@ def main():
                     reg_loss = model.recon_loss(adj_pred, graph_nei.to(device))
                     #loss = loss_atac_G(y, discriminator)
                     loss = loss_atac_G(y, discriminator, data.edge_index, data.coordinates)
-                    #reg_loss = regularization_loss(z, graph_nei, graph_neg)
-                    kl_divergence = model.kl_loss(mu, logstd)
-                    print("ddd")
-                    print(loss * 10)
-                    print(reg_loss * 0.1)
-                    print(kl_divergence )
-                    
-                    loss = loss * 10 #+ reg_loss * 0.1  #+ kl_divergence 
                     loss.backward()
-                    
-
                     optimizer.step()
                     loss_history.append(loss.item())
-                    
-                    
                     print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss.item():.4f}")
         
             return loss_history
@@ -935,9 +726,6 @@ def main():
             model.train()
             discriminator.train()
             model = model.to(device)
-            
-         
-            
             data = data.to(device)
             discriminator.to(device)
             loss_history = []
@@ -946,61 +734,37 @@ def main():
             size_factors_rna = torch.ones(data.x.size(0)).to(device)
             #print(data)
             y_hat = truth_rna.x.to(device)
-            print(y_hat)
-            
             from torch_geometric.utils import to_dense_adj
-    
             graph_nei = to_dense_adj(data.edge_index, max_num_nodes=data.x.size(0))[0]  # 
             graph_neg = 1 - graph_nei  # 
             graph_neg.fill_diagonal_(0)  # 
-            
-            
             for epoch in range(epochs):
-                
                 z, retval1, retval2, retval3, mu, logstd, adj_pred = model(
                 data.x.to(device), data.edge_index.to(device),data.coordinates.to(device)
             )
                 updaterD.zero_grad()
                 dd = max(dd, retval1.detach().cpu().numpy().max())
-                
                 loss2 = loss_D(retval1, y_hat, discriminator, data.edge_index, data.coordinates)
                 loss2.backward()
                 updaterD.step()
                 trainD_losses.append(loss2.item())
                 for p in discriminator.parameters():
                     p.data.clamp_(-args.clip_value, args.clip_value)
-                
                 if epoch % 1 == 0:
                     optimizer.zero_grad()
                     z, retval1, retval2, retval3, mu, logstd, adj_pred = model(
                     data.x.to(device), data.edge_index.to(device),data.coordinates.to(device)
                     )
                     loss = loss_rna_G(retval1, discriminator, data.edge_index, data.coordinates)
-                    #reg_loss = model.recon_loss(adj_pred, graph_nei.to(device))
-                    reg_loss = regularization_loss(z, graph_nei, graph_neg)
-                    
-                    kl_divergence = model.kl_loss(mu, logstd)
-                    print("ddd")
-                    print(loss )
-                    print(kl_divergence)
-                    print(reg_loss)
-                    #print(kl_divergence )
-                    loss = loss #+ kl_divergence + reg_loss #
-                    #loss = loss_bce(y_hat, y)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
                     optimizer.step()
-                    
                     loss_history.append(loss.item())
                     print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss.item():.4f}")
-                    print(dd)
-        
             return loss_history
           
-            
         def train_cycle_consistency(generator_A, generator_B, num_epochs, train_iter, test_iter,truth_iter,
                             updaterG_A, updaterG_B, lambda_cycle, discriminator, cuda=True, ISRNA=True, sc_rna_train_dataset_save = sc_rna_train_dataset_save):
-            # 
             device_rna = 'cuda:1'
             device_atac = 'cuda:1'
             loss1_history, loss2_history, loss1_test_history = [], [], []
@@ -1037,7 +801,6 @@ def main():
                 train_losses_2 = []
                
                 for i in range(1):
-                    
                     # RNA 
                     rna_features = train_rna.x.to(device_rna)
                     rna_edge_index = train_rna.edge_index.to(device_rna) #RNA 
@@ -1057,17 +820,6 @@ def main():
                     else :
                         z_atac, retval1, retval2, retval3, mu_atac, logstd_atac, adj_pred_atac = generator_A(atac_features, atac_edge_index,atac_edge_coord)
                         z_rna, y, mu_rna, logstad_rna, adj_pred_rna = generator_B(rna_features, rna_edge_index,rna_edge_coord)
-                    
-                    
-                    #rna2atac_latent = rna2atac(z_rna)
-                    #rna_latent_recon = atac2rna(rna2atac_latent)
-                    
-                    #atac2rna_latent = atac2rna(z_atac)
-                    #atac_latent_recon = rna2atac(atac2rna_latent)
-                    
-                    #cycle_loss_rna = F.l1_loss(z_rna, rna_latent_recon)  # RNA Cycle Loss
-                    #cycle_loss_atac = F.l1_loss(z_atac, atac_latent_recon)  # ATAC Cycle Loss
-                    
                     
                     if(ISRNA) :
                         rna_recon_cycle_loss_1 = loss_rna(preds=retval1, theta=retval2, truth=rna_features,)
@@ -1122,10 +874,8 @@ def main():
                     
                     # 
                     if ISRNA:
-                        #loss_A = rna_recon_cycle_loss + reg_loss_rna * 0.01 + lambda_cycle * (cycle_loss_rna )#+ cycle_loss_atac) # + kl_rna
                         loss_A = rna_recon_cycle_loss #+ cycle_loss_rna * 0.1#* 10 #+ 0.01 * (cycle_loss_rna) + rna_recon_cycle_loss_train # 10 + reg_loss_rna * 0.01 + lambda_cycle * (cycle_loss_rna )#+ cycle_loss_atac) # + kl_rna
                     else :
-                        #loss_A = atac_recon_cycle_loss * 0.01 + reg_loss_atac  + lambda_cycle * ( cycle_loss_atac) #+ kl_atac
                         loss_A =  atac_recon_cycle_loss #+ cycle_loss_atac * 0.1 #+ atac_recon_cycle_loss_train *  0.01# + reg_loss_atac * 0.01 + lambda_cycle * ( cycle_loss_atac) #+ kl_atac
                     print(f"loss_A Loss: {loss_A.item():.4f}")
                     
@@ -1142,43 +892,30 @@ def main():
                         print(truth.shape)
                         print(valid_rna.x.shape)
                         predict_atac(truth, generator_B, valid_rna, outdir_name, rna2atac, atac2rna)
-                # 
                 loss1_history.append(np.mean(train_losses_1))
                 logging.info(f"Epoch [{epoch + 1}/{num_epochs}], loss_A: {loss1_history[-1]:.4f}")
 
-                # 
                 if test_iter:
                     generator_A.eval()
                     generator_B.eval()
                     valid_losses_1 = []
-
                     with torch.no_grad():
                         rna_features_test = test_rna.x.to(device_rna)
-                        rna_edge_index_test = test_rna.edge_index.to(device_rna) #RNA 
-                        rna_coord_test = test_rna.coordinates.to(device_rna)  #RNA 
+                        rna_edge_index_test = test_rna.edge_index.to(device_rna) 
+                        rna_coord_test = test_rna.coordinates.to(device_rna)  
                     
                         # ATAC
-                        atac_features_test = test_atac.x.to(device_atac)  # ATAC
-                        atac_edge_index_test = test_atac.edge_index.to(device_atac)  # ATAC
-                        atac_coord_test = test_atac.coordinates.to(device_atac)  #RNA 
+                        atac_features_test = test_atac.x.to(device_atac) 
+                        atac_edge_index_test = test_atac.edge_index.to(device_atac)  
+                        atac_coord_test = test_atac.coordinates.to(device_atac) 
                             
                         if(ISRNA) :
                             z_rna_test, y_test, mu_rna_test, logstad_rna_test, adj_pred_rna = generator_A(rna_features_test, rna_edge_index_test, rna_coord_test)
                             z_atac_test, retval1_test, retval2_test, retval3_test, mu_atac_test, logstd_atac_test, adj_pred_atac = generator_B(atac_features_test, atac_edge_index_test, atac_coord_test)
                             #retval1_orign_test, retval2_orign_test, retval3_orign_test, adj_pred_orign_test = generator_B.decoder(z_rna_test, rna_edge_coord)
                         else: 
-                            print("eeee")
                             z_atac_test, retval1_test, retval2_test, retval3_test, mu_atac_test, logstd_atac_test, adj_pred_atac = generator_A(atac_features_test, atac_edge_index_test, atac_coord_test)
                             z_rna_test, y_test, mu_rna_test, logstad_rna_test, adj_pred_rna = generator_B(rna_features_test, rna_edge_index_test, rna_coord_test)    
-                        
-                        #rna2atac_latent_test = rna2atac(z_rna_test)
-                        #rna_latent_recon_test = atac2rna(rna2atac_latent_test)
-                            
-                        #atac2rna_latent_test = atac2rna(z_atac_test)
-                        #atac_latent_recon_test = rna2atac(atac2rna_latent_test)
-                            
-                        #cycle_loss_rna_test = F.l1_loss(z_rna_test, rna_latent_recon_test)  # RNA Cycle Loss
-                        #cycle_loss_atac_test = F.l1_loss(z_atac_test, atac_latent_recon_test)  # ATAC Cycle Loss
                         
                         if(ISRNA):
                             #rna_recon_cycle_loss_test = loss_rna(preds=retval1_test, theta=retval2_test, truth=rna_features_test)
@@ -1221,11 +958,8 @@ def main():
                         #loss_test = atac_recon_cycle_loss_test + rna_recon_cycle_loss_test #+ lambda_cycle * (cycle_loss_rna_test + cycle_loss_atac_test)
                         valid_losses_1.append(loss_test.item()) 
 
-                    # 
                     loss1_test_history.append(np.mean(valid_losses_1))
                     logging.info(f"Test loss: {loss1_test_history[-1]:.4f}")
-
-                    # 
                     early_stopping(loss1_test_history[-1], generator_B)
                     if early_stopping.early_stop:
                         logging.info("Early stopping triggered!")
@@ -1236,16 +970,8 @@ def main():
                             truth = valid_atac.x#.to(device_rna)
                             predict_atac(truth, generator_B,valid_rna, outdir_name, rna2atac, atac2rna)
                         break
-
-                    # 
-                    #fig = plot_loss_history(loss1_history, loss2_history, loss1_test_history, os.path.join(outdir_name, f"lossATAC-RNA.{args.ext}"))
-                    #plt.close(fig)
-
             return loss1_history, loss2_history, loss1_test_history
         
-        
-        
-        #
         #train_vgae(model = generatorATAC, optimizer = optimizer_atac_1, data = train_rna, epochs = 200, device = 'cuda:0', truth_atac = train_atac,discriminator =  ATACdiscriminator, updaterD = optimizer_D_atac)
         #torch.save(generatorATAC.state_dict(),os.path.join(outdir_name, f"ATACgenerator.pth"))
         #torch.save(generatorATAC.state_dict(),os.path.join(outdir_name, f"ATACgenerator.pth"))
@@ -1257,9 +983,6 @@ def main():
         
             
         # load_model
-        #dddd
-        
-        
         generatorRNA.load_state_dict(torch.load(os.path.join(outdir_name, "RNAgenerator.pth")))
         #generatorATAC.load_state_dict(torch.load(os.path.join(outdir_name, "ATACgenerator.pth")))
         #truth = valid_atac.x#.to(device_rna)
@@ -1326,11 +1049,11 @@ def main():
         #)
         #plt.close(fig)
         torch.save(generatorRNA.state_dict(),os.path.join(outdir_name, f"RNAgenerator.pth"))
-        #torch.save(RNAdiscriminator.state_dict(), os.path.join(outdir_name, f"RNAdiscriminator.pth"))
-        #torch.save(generatorATAC.state_dict(),os.path.join(outdir_name, f"ATACgenerator.pth"))
-        #torch.save(ATACdiscriminator.state_dict(), os.path.join(outdir_name, f"ATACdiscriminator.pth"))
-        #torch.save(rna2atac.state_dict(),os.path.join(outdir_name, f"rna2atac.pth"))
-        #torch.save(atac2rna.state_dict(),os.path.join(outdir_name, f"atac2rna.pth"))
+        torch.save(RNAdiscriminator.state_dict(), os.path.join(outdir_name, f"RNAdiscriminator.pth"))
+        torch.save(generatorATAC.state_dict(),os.path.join(outdir_name, f"ATACgenerator.pth"))
+        torch.save(ATACdiscriminator.state_dict(), os.path.join(outdir_name, f"ATACdiscriminator.pth"))
+        torch.save(rna2atac.state_dict(),os.path.join(outdir_name, f"rna2atac.pth"))
+        torch.save(atac2rna.state_dict(),os.path.join(outdir_name, f"atac2rna.pth"))
 
 
 if __name__ == "__main__":
