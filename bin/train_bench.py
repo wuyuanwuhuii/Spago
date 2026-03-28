@@ -32,7 +32,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 SRC_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scMOG"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Spago"
 )
 assert os.path.isdir(SRC_DIR)
 sys.path.append(SRC_DIR)
@@ -127,10 +127,6 @@ logging.basicConfig(level=logging.INFO)
 
 SAVEFIG_DPI = 1200
 CUDA_VISIBLE_DEVICES=2
-
-
-#sc_rna_test_dataset=ad.read_h5ad('/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/mouse_embryo/valid_rna.h5ad')
-#sc_atac_test_dataset=ad.read_h5ad('/mnt/5468e/twang/WBT/scMOG-main/scMOG-main/scMOG_code/mouse_embryo/valid_atac.h5ad')
 
 def build_parser():
     """Building a parameter parser"""
@@ -284,7 +280,6 @@ def split_graph_data_two(graph_rna, graph_atac, test_size=0.1, val_size=0.3, see
     np.random.seed(seed)
     num_nodes = graph_rna.x.shape[0]  
     
-    # 
     train_idx, temp_idx = train_test_split(range(num_nodes), test_size=test_size + val_size, random_state=42)
     val_idx, test_idx = train_test_split(temp_idx, test_size=test_size / (test_size + val_size), random_state=42)
     
@@ -300,7 +295,6 @@ def split_graph_data_two(graph_rna, graph_atac, test_size=0.1, val_size=0.3, see
     train_x_atac[val_idx,:] = 0  # 
     train_x_atac[test_idx,:] = 0  #
 
-    # 
     train_rna = Data(x=train_x_rna, edge_index=graph_rna.edge_index, coordinates=graph_rna.coordinates)
     train_atac = Data(x=train_x_atac, edge_index=graph_atac.edge_index, coordinates=graph_atac.coordinates)
     
@@ -386,10 +380,6 @@ def preprocess_combined_graph_Guss(adata, feature_type, sigma=1.0, threshold=0.1
 
     return Data(x=features, edge_index=edge_index_spatial, coordinates=coordinates)
 
-
-
-
-
 def preprocess_combined_graph(adata, feature_type, k=14, metric='cosine'):
     coordinates = torch.tensor(list(zip(adata.obs['x'], adata.obs['y'])), dtype=torch.float32)
     nbrs = NearestNeighbors(n_neighbors=k + 1, algorithm='ball_tree').fit(coordinates)
@@ -402,16 +392,12 @@ def preprocess_combined_graph(adata, feature_type, k=14, metric='cosine'):
                 edge_index_spatial.append([i, neighbor])
     edge_index_spatial = torch.tensor(edge_index_spatial, dtype=torch.long).t()
 
-    # 
-    print("1232445555")
-    print(adata)
+
     X = adata.X.tocoo() if hasattr(adata.X, "tocoo") else adata.X
     if issparse(X):
         features = torch.tensor(X.toarray(), dtype=torch.float32)
     else:
         features = torch.tensor(X, dtype=torch.float32)
-
-    # 
     if feature_type == 'rna':
         edge_index_feature = build_adjacency_from_rna(features, k=k, metric=metric)
     elif feature_type == 'atac':
@@ -419,7 +405,7 @@ def preprocess_combined_graph(adata, feature_type, k=14, metric='cosine'):
     else:
         raise ValueError("Invalid feature_type. Use 'rna' or 'atac'.")
 
-    # 
+    
     return Data(x=features, edge_index=edge_index_spatial, coordinates=coordinates)
 
 def preprocess_self_loop_graph(adata):
