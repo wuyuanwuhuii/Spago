@@ -927,12 +927,12 @@ def main():
         
             
         # load_model to predict
-        if task == 'predict_rna':
+        if args.task == 'predict_rna':
             generatorRNA.load_state_dict(torch.load(os.path.join(outdir_name, "RNAgenerator.pth")))
             truth_rna = valid_rna.x#.to(device_rna)
             predict_rna(truth_rna, generatorRNA,valid_protein, outdir_name, rna2protein, protein2rna, sc_rna_train_dataset_save)
         
-        if task == 'predict_protein':
+        if args.task == 'predict_protein':
             generatorprotein.load_state_dict(torch.load(os.path.join(outdir_name, "proteingenerator.pth")))
             truth = valid_protein.x#.to(device_rna)
             predict_protein(truth, generatorprotein,valid_rna, outdir_name, rna2protein, protein2rna)
