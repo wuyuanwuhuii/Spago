@@ -12,14 +12,13 @@ To install Spago, make sure you have [PyTorch](https://pytorch.org/) and [scanpy
 With the datasets obtained after pre-processing, we can then train the model:
 
 ```bash
-python bin/train_predict_rna.py --outdir output
+python bin/predict_rna_protein.py --outdir output
 ```
 ### Generation on other datasets
 Once trained, Spago can generate paired datasets from other datasets using the following example command.
 
 ```bash
-python bin/predict-rna.py --outdir Otherdataset_generation 
-python bin/predict-atac.py --outdir Otherdataset_generation 
+python bin/predict_rna_protein.py --outdir Otherdataset_generation --task predict_protein
 ```
 
 ### Additional commandline options
